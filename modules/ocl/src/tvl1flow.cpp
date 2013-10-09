@@ -62,30 +62,35 @@ cv::ocl::OpticalFlowDual_TVL1_OCL::OpticalFlowDual_TVL1_OCL()
 
 void cv::ocl::OpticalFlowDual_TVL1_OCL::operator()(const oclMat& I0, const oclMat& I1, oclMat& flowx, oclMat& flowy)
 {
+    oclMat tmp_flow, tmp_flows[2];
+    (*this)(I0, I1, tmp_flow);
+    split(tmp_flow, tmp_flows);
+    flowx = tmp_flows[0];
+    flowy = tmp_flows[1];
+}
+
+void cv::ocl::OpticalFlowDual_TVL1_OCL::operator()(const oclMat& I0, const oclMat& I1, oclMat& flow)
+{
     CV_Assert( I0.type() == CV_8UC1 || I0.type() == CV_32FC1 );
     CV_Assert( I0.size() == I1.size() );
     CV_Assert( I0.type() == I1.type() );
-    CV_Assert( !useInitialFlow || (flowx.size() == I0.size() && flowx.type() == CV_32FC1 && flowy.size() == flowx.size() && flowy.type() == flowx.type()) );
+    CV_Assert( !useInitialFlow || (flow.size() == I0.size() && flow.type() == CV_32FC2) );
     CV_Assert( nscales > 0 );
 
     // allocate memory for the pyramid structure
     I0s.resize(nscales);
     I1s.resize(nscales);
     u1s.resize(nscales);
-    u2s.resize(nscales);
-    //I0s_step == I1s_step
+
     I0.convertTo(I0s[0], CV_32F, I0.depth() == CV_8U ? 1.0 : 255.0);
     I1.convertTo(I1s[0], CV_32F, I1.depth() == CV_8U ? 1.0 : 255.0);
 
 
     if (!useInitialFlow)
     {
-        flowx.create(I0.size(), CV_32FC1);
-        flowy.create(I0.size(), CV_32FC1);
+        flow.create(I0.size(), CV_32FC2);
     }
-    //u1s_step != u2s_step
-    u1s[0] = flowx;
-    u2s[0] = flowy;
+    u1s[0] = flow;
 
     I1x_buf.create(I0.size(), CV_32FC1);
     I1y_buf.create(I0.size(), CV_32FC1);
@@ -97,10 +102,7 @@ void cv::ocl::OpticalFlowDual_TVL1_OCL::operator()(const oclMat& I0, const oclMa
     grad_buf.create(I0.size(), CV_32FC1);
     rho_c_buf.create(I0.size(), CV_32FC1);
 
-    p11_buf.create(I0.size(), CV_32FC1);
-    p12_buf.create(I0.size(), CV_32FC1);
-    p21_buf.create(I0.size(), CV_32FC1);
-    p22_buf.create(I0.size(), CV_32FC1);
+    p11_buf.create(I0.size(), CV_32FC4);
 
     diff_buf.create(I0.size(), CV_32FC1);
 
@@ -119,12 +121,7 @@ void cv::ocl::OpticalFlowDual_TVL1_OCL::operator()(const oclMat& I0, const oclMa
         if (useInitialFlow)
         {
             ocl::pyrDown(u1s[s - 1], u1s[s]);
-            ocl::pyrDown(u2s[s - 1], u2s[s]);
-
-            //ocl::multiply(u1s[s], Scalar::all(0.5), u1s[s]);
-            multiply(0.5, u1s[s], u1s[s]);
-            //ocl::multiply(u2s[s], Scalar::all(0.5), u2s[s]);
-            multiply(0.5, u1s[s], u2s[s]);
+            ocl::multiply(0.5, u1s[s], u1s[s]);
         }
     }
 
@@ -132,22 +129,21 @@ void cv::ocl::OpticalFlowDual_TVL1_OCL::operator()(const oclMat& I0, const oclMa
     for (int s = nscales - 1; s >= 0; --s)
     {
         // compute the optical flow at the current scale
-        procOneScale(I0s[s], I1s[s], u1s[s], u2s[s]);
+        procOneScale(I0s[s], I1s[s], u1s[s]);
 
         // if this was the last scale, finish now
         if (s == 0)
             break;
 
+
         // otherwise, upsample the optical flow
 
         // zoom the optical flow for the next finer scale
+
         ocl::resize(u1s[s], u1s[s - 1], I0s[s - 1].size());
-        ocl::resize(u2s[s], u2s[s - 1], I0s[s - 1].size());
 
         // scale the optical flow with the appropriate zoom factor
-        multiply(2, u1s[s - 1], u1s[s - 1]);
-        multiply(2, u2s[s - 1], u2s[s - 1]);
-
+        ocl::multiply(2, u1s[s - 1], u1s[s - 1]);
     }
 
 }
@@ -156,20 +152,19 @@ namespace ocl_tvl1flow
 {
     void centeredGradient(const oclMat &src, oclMat &dx, oclMat &dy);
 
-    void warpBackward(const oclMat &I0, const oclMat &I1, oclMat &I1x, oclMat &I1y,
-        oclMat &u1, oclMat &u2, oclMat &I1w, oclMat &I1wx, oclMat &I1wy,
+    void warpBackward(const oclMat &I0, const oclMat &I1, oclMat &I1x, oclMat &I1y, 
+        oclMat &u, oclMat &I1w, oclMat &I1wx, oclMat &I1wy, 
         oclMat &grad, oclMat &rho);
 
-    void estimateU(oclMat &I1wx, oclMat &I1wy, oclMat &grad,
-        oclMat &rho_c, oclMat &p11, oclMat &p12,
-        oclMat &p21, oclMat &p22, oclMat &u1,
-        oclMat &u2, oclMat &error, float l_t, float theta, char calc_error);
+    void estimateU(oclMat &I1wx, oclMat &I1wy, oclMat &grad, 
+        oclMat &rho_c, oclMat &p, oclMat &u, 
+        oclMat &error, float l_t, float theta, char calc_error);
 
-    void estimateDualVariables(oclMat &u1, oclMat &u2,
-        oclMat &p11, oclMat &p12, oclMat &p21, oclMat &p22, float taut);
+    void estimateDualVariables(oclMat &u, 
+        oclMat &p, float taut);
 }
 
-void cv::ocl::OpticalFlowDual_TVL1_OCL::procOneScale(const oclMat &I0, const oclMat &I1, oclMat &u1, oclMat &u2)
+void cv::ocl::OpticalFlowDual_TVL1_OCL::procOneScale(const oclMat &I0, const oclMat &I1, oclMat &u)
 {
     using namespace ocl_tvl1flow;
 
@@ -177,16 +172,12 @@ void cv::ocl::OpticalFlowDual_TVL1_OCL::procOneScale(const oclMat &I0, const ocl
 
     CV_DbgAssert( I1.size() == I0.size() );
     CV_DbgAssert( I1.type() == I0.type() );
-    CV_DbgAssert( u1.empty() || u1.size() == I0.size() );
-    CV_DbgAssert( u2.size() == u1.size() );
+    CV_DbgAssert( u.empty() || u.size() == I0.size() );
 
-    if (u1.empty())
+    if (u.empty())
     {
-        u1.create(I0.size(), CV_32FC1);
-        u1.setTo(Scalar::all(0));
-
-        u2.create(I0.size(), CV_32FC1);
-        u2.setTo(Scalar::all(0));
+        u.create(I0.size(), CV_32FC2);
+        u.setTo(Scalar::all(0));
     }
 
     oclMat I1x = I1x_buf(Rect(0, 0, I0.cols, I0.rows));
@@ -201,14 +192,8 @@ void cv::ocl::OpticalFlowDual_TVL1_OCL::procOneScale(const oclMat &I0, const ocl
     oclMat grad = grad_buf(Rect(0, 0, I0.cols, I0.rows));
     oclMat rho_c = rho_c_buf(Rect(0, 0, I0.cols, I0.rows));
 
-    oclMat p11 = p11_buf(Rect(0, 0, I0.cols, I0.rows));
-    oclMat p12 = p12_buf(Rect(0, 0, I0.cols, I0.rows));
-    oclMat p21 = p21_buf(Rect(0, 0, I0.cols, I0.rows));
-    oclMat p22 = p22_buf(Rect(0, 0, I0.cols, I0.rows));
-    p11.setTo(Scalar::all(0));
-    p12.setTo(Scalar::all(0));
-    p21.setTo(Scalar::all(0));
-    p22.setTo(Scalar::all(0));
+    oclMat p = p11_buf(Rect(0, 0, I0.cols, I0.rows));
+    p.setTo(Scalar::all(0));
 
     oclMat diff = diff_buf(Rect(0, 0, I0.cols, I0.rows));
 
@@ -217,7 +202,7 @@ void cv::ocl::OpticalFlowDual_TVL1_OCL::procOneScale(const oclMat &I0, const ocl
 
     for (int warpings = 0; warpings < warps; ++warpings)
     {
-        warpBackward(I0, I1, I1x, I1y, u1, u2, I1w, I1wx, I1wy, grad, rho_c);
+        warpBackward(I0, I1, I1x, I1y, u, I1w, I1wx, I1wy, grad, rho_c);
 
         double error = numeric_limits<double>::max();
         double prev_error = 0;
@@ -225,8 +210,8 @@ void cv::ocl::OpticalFlowDual_TVL1_OCL::procOneScale(const oclMat &I0, const ocl
         {
             // some tweaks to make sum operation less frequently
             char calc_error = (n & 0x1) && (prev_error < scaledEpsilon);
-            estimateU(I1wx, I1wy, grad, rho_c, p11, p12, p21, p22,
-                      u1, u2, diff, l_t, static_cast<float>(theta), calc_error);
+            estimateU(I1wx, I1wy, grad, rho_c, p, 
+                u, diff, l_t, static_cast<float>(theta), calc_error);
             if(calc_error)
             {
                 error = ocl::sum(diff)[0];
@@ -237,8 +222,7 @@ void cv::ocl::OpticalFlowDual_TVL1_OCL::procOneScale(const oclMat &I0, const ocl
                 error = numeric_limits<double>::max();
                 prev_error -= scaledEpsilon;
             }
-            estimateDualVariables(u1, u2, p11, p12, p21, p22, taut);
-
+            estimateDualVariables(u, p, taut);
         }
     }
 
@@ -250,7 +234,6 @@ void cv::ocl::OpticalFlowDual_TVL1_OCL::collectGarbage()
     I0s.clear();
     I1s.clear();
     u1s.clear();
-    u2s.clear();
 
     I1x_buf.release();
     I1y_buf.release();
@@ -263,9 +246,6 @@ void cv::ocl::OpticalFlowDual_TVL1_OCL::collectGarbage()
     rho_c_buf.release();
 
     p11_buf.release();
-    p12_buf.release();
-    p21_buf.release();
-    p22_buf.release();
 
     diff_buf.release();
     norm_buf.release();
@@ -296,68 +276,53 @@ void ocl_tvl1flow::centeredGradient(const oclMat &src, oclMat &dx, oclMat &dy)
 
 }
 
-void ocl_tvl1flow::estimateDualVariables(oclMat &u1, oclMat &u2, oclMat &p11, oclMat &p12, oclMat &p21, oclMat &p22, float taut)
+void ocl_tvl1flow::estimateDualVariables(oclMat &u, oclMat &p11, float taut)
 {
-    Context *clCxt = u1.clCxt;
+    Context *clCxt = u.clCxt;
 
     size_t localThread[] = {32, 8, 1};
-    size_t globalThread[] =
+    size_t globalThread[] = 
     {
-        u1.cols,
-        u1.rows,
+        u.cols, 
+        u.rows,
         1
     };
 
-    int u1_element_size = u1.elemSize();
-    int u1_step = u1.step/u1_element_size;
-
-    int u2_element_size = u2.elemSize();
-    int u2_step = u2.step/u2_element_size;
+    int u1_element_size = u.elemSize();
+    int u1_step = u.step/u1_element_size;
 
     int p11_element_size = p11.elemSize();
     int p11_step = p11.step/p11_element_size;
 
-    int u1_offset_y = u1.offset/u1.step;
-    int u1_offset_x = u1.offset%u1.step;
-    u1_offset_x = u1_offset_x/u1.elemSize();
-
-    int u2_offset_y = u2.offset/u2.step;
-    int u2_offset_x = u2.offset%u2.step;
-    u2_offset_x = u2_offset_x/u2.elemSize();
+    int u1_offset_y = u.offset/u.step;
+    int u1_offset_x = u.offset%u.step;
+    u1_offset_x = u1_offset_x/u.elemSize();
 
     string kernelName = "estimateDualVariablesKernel";
     vector< pair<size_t, const void *> > args;
-    args.push_back( make_pair( sizeof(cl_mem), (void*)&u1.data));
-    args.push_back( make_pair( sizeof(cl_int), (void*)&u1.cols));
-    args.push_back( make_pair( sizeof(cl_int), (void*)&u1.rows));
+    args.push_back( make_pair( sizeof(cl_mem), (void*)&u.data));
+    args.push_back( make_pair( sizeof(cl_int), (void*)&u.cols));
+    args.push_back( make_pair( sizeof(cl_int), (void*)&u.rows));
     args.push_back( make_pair( sizeof(cl_int), (void*)&u1_step));
-    args.push_back( make_pair( sizeof(cl_mem), (void*)&u2.data));
     args.push_back( make_pair( sizeof(cl_mem), (void*)&p11.data));
     args.push_back( make_pair( sizeof(cl_int), (void*)&p11_step));
-    args.push_back( make_pair( sizeof(cl_mem), (void*)&p12.data));
-    args.push_back( make_pair( sizeof(cl_mem), (void*)&p21.data));
-    args.push_back( make_pair( sizeof(cl_mem), (void*)&p22.data));
     args.push_back( make_pair( sizeof(cl_float), (void*)&taut));
-    args.push_back( make_pair( sizeof(cl_int), (void*)&u2_step));
     args.push_back( make_pair( sizeof(cl_int), (void*)&u1_offset_x));
     args.push_back( make_pair( sizeof(cl_int), (void*)&u1_offset_y));
-    args.push_back( make_pair( sizeof(cl_int), (void*)&u2_offset_x));
-    args.push_back( make_pair( sizeof(cl_int), (void*)&u2_offset_y));
 
     openCLExecuteKernel(clCxt, &tvl1flow, kernelName, globalThread, localThread, args, -1, -1);
 }
 
-void ocl_tvl1flow::estimateU(oclMat &I1wx, oclMat &I1wy, oclMat &grad,
-    oclMat &rho_c, oclMat &p11, oclMat &p12,
-    oclMat &p21, oclMat &p22, oclMat &u1,
-    oclMat &u2, oclMat &error, float l_t, float theta, char calc_error)
+void ocl_tvl1flow::estimateU(oclMat &I1wx, oclMat &I1wy, oclMat &grad, 
+                             oclMat &rho_c, oclMat &p, oclMat &u, 
+                             oclMat &error, float l_t, float theta, char calc_error)
 {
     Context* clCxt = I1wx.clCxt;
 
     size_t localThread[] = {32, 8, 1};
-    size_t globalThread[] =
+    size_t globalThread[] = 
     {
-        I1wx.cols,
+        I1wx.cols, 
         I1wx.rows,
         1
     };
@@ -365,19 +330,12 @@ void ocl_tvl1flow::estimateU(oclMat &I1wx, oclMat &I1wy, oclMat &grad,
     int I1wx_element_size = I1wx.elemSize();
     int I1wx_step = I1wx.step/I1wx_element_size;
 
-    int u1_element_size = u1.elemSize();
-    int u1_step = u1.step/u1_element_size;
+    int u1_element_size = u.elemSize();
+    int u1_step = u.step/u1_element_size;
 
-    int u2_element_size = u2.elemSize();
-    int u2_step = u2.step/u2_element_size;
-
-    int u1_offset_y = u1.offset/u1.step;
-    int u1_offset_x = u1.offset%u1.step;
-    u1_offset_x = u1_offset_x/u1.elemSize();
-
-    int u2_offset_y = u2.offset/u2.step;
-    int u2_offset_x = u2.offset%u2.step;
-    u2_offset_x = u2_offset_x/u2.elemSize();
+    int u1_offset_y = u.offset/u.step;
+    int u1_offset_x = u.offset%u.step;
+    u1_offset_x = u1_offset_x/u.elemSize();
 
     string kernelName = "estimateUKernel";
     vector< pair<size_t, const void *> > args;
@@ -388,38 +346,25 @@ void ocl_tvl1flow::estimateU(oclMat &I1wx, oclMat &I1wy, oclMat &grad,
     args.push_back( make_pair( sizeof(cl_mem), (void*)&I1wy.data));
     args.push_back( make_pair( sizeof(cl_mem), (void*)&grad.data));
     args.push_back( make_pair( sizeof(cl_mem), (void*)&rho_c.data));
-    args.push_back( make_pair( sizeof(cl_mem), (void*)&p11.data));
-    args.push_back( make_pair( sizeof(cl_mem), (void*)&p12.data));
-    args.push_back( make_pair( sizeof(cl_mem), (void*)&p21.data));
-    args.push_back( make_pair( sizeof(cl_mem), (void*)&p22.data));
-    args.push_back( make_pair( sizeof(cl_mem), (void*)&u1.data));
+    args.push_back( make_pair( sizeof(cl_mem), (void*)&p.data));
+    args.push_back( make_pair( sizeof(cl_mem), (void*)&u.data));
     args.push_back( make_pair( sizeof(cl_int), (void*)&u1_step));
-    args.push_back( make_pair( sizeof(cl_mem), (void*)&u2.data));
     args.push_back( make_pair( sizeof(cl_mem), (void*)&error.data));
     args.push_back( make_pair( sizeof(cl_float), (void*)&l_t));
     args.push_back( make_pair( sizeof(cl_float), (void*)&theta));
-    args.push_back( make_pair( sizeof(cl_int), (void*)&u2_step));
     args.push_back( make_pair( sizeof(cl_int), (void*)&u1_offset_x));
     args.push_back( make_pair( sizeof(cl_int), (void*)&u1_offset_y));
-    args.push_back( make_pair( sizeof(cl_int), (void*)&u2_offset_x));
-    args.push_back( make_pair( sizeof(cl_int), (void*)&u2_offset_y));
     args.push_back( make_pair( sizeof(cl_char), (void*)&calc_error));
 
     openCLExecuteKernel(clCxt, &tvl1flow, kernelName, globalThread, localThread, args, -1, -1);
 }
 
-void ocl_tvl1flow::warpBackward(const oclMat &I0, const oclMat &I1, oclMat &I1x, oclMat &I1y, oclMat &u1, oclMat &u2, oclMat &I1w, oclMat &I1wx, oclMat &I1wy, oclMat &grad, oclMat &rho)
+void ocl_tvl1flow::warpBackward(const oclMat &I0, const oclMat &I1, oclMat &I1x, oclMat &I1y, oclMat &u, oclMat &I1w, oclMat &I1wx, oclMat &I1wy, oclMat &grad, oclMat &rho)
 {
     Context* clCxt = I0.clCxt;
-    const bool isImgSupported = support_image2d(clCxt);
 
-    CV_Assert(isImgSupported);
-
-    int u1ElementSize = u1.elemSize();
-    int u1Step = u1.step/u1ElementSize;
-
-    int u2ElementSize = u2.elemSize();
-    int u2Step = u2.step/u2ElementSize;
+    int u1ElementSize = u.elemSize();
+    int u1Step = u.step/u1ElementSize;
 
     int I0ElementSize = I0.elemSize();
     int I0Step = I0.step/I0ElementSize;
@@ -427,28 +372,20 @@ void ocl_tvl1flow::warpBackward(const oclMat &I0, const oclMat &I1, oclMat &I1x,
     int I1w_element_size = I1w.elemSize();
     int I1w_step = I1w.step/I1w_element_size;
 
-    int u1_offset_y = u1.offset/u1.step;
-    int u1_offset_x = u1.offset%u1.step;
-    u1_offset_x = u1_offset_x/u1.elemSize();
+    int u1_offset_y = u.offset/u.step;
+    int u1_offset_x = u.offset%u.step;
+    u1_offset_x = u1_offset_x/u.elemSize();
 
-    int u2_offset_y = u2.offset/u2.step;
-    int u2_offset_x = u2.offset%u2.step;
-    u2_offset_x = u2_offset_x/u2.elemSize();
+    int I1_step  = I1.step / I1.elemSize();
+    int I1x_step = I1x.step / I1x.elemSize();
 
     size_t localThread[] = {32, 8, 1};
-    size_t globalThread[] =
+    size_t globalThread[] = 
     {
-        I0.cols,
+        I0.cols, 
         I0.rows,
         1
     };
-
-    cl_mem I1_tex;
-    cl_mem I1x_tex;
-    cl_mem I1y_tex;
-    I1_tex = bindTexture(I1);
-    I1x_tex = bindTexture(I1x);
-    I1y_tex = bindTexture(I1y);
 
     string kernelName = "warpBackwardKernel";
     vector< pair<size_t, const void *> > args;
@@ -456,27 +393,20 @@ void ocl_tvl1flow::warpBackward(const oclMat &I0, const oclMat &I1, oclMat &I1x,
     args.push_back( make_pair( sizeof(cl_int), (void*)&I0Step));
     args.push_back( make_pair( sizeof(cl_int), (void*)&I0.cols));
     args.push_back( make_pair( sizeof(cl_int), (void*)&I0.rows));
-    args.push_back( make_pair( sizeof(cl_mem), (void*)&I1_tex));
-    args.push_back( make_pair( sizeof(cl_mem), (void*)&I1x_tex));
-    args.push_back( make_pair( sizeof(cl_mem), (void*)&I1y_tex));
-    args.push_back( make_pair( sizeof(cl_mem), (void*)&u1.data));
+    args.push_back( make_pair( sizeof(cl_mem), (void*)&I1.data));
+    args.push_back( make_pair( sizeof(cl_mem), (void*)&I1x.data));
+    args.push_back( make_pair( sizeof(cl_mem), (void*)&I1y.data));
+    args.push_back( make_pair( sizeof(cl_mem), (void*)&u.data));
     args.push_back( make_pair( sizeof(cl_int), (void*)&u1Step));
-    args.push_back( make_pair( sizeof(cl_mem), (void*)&u2.data));
     args.push_back( make_pair( sizeof(cl_mem), (void*)&I1w.data));
     args.push_back( make_pair( sizeof(cl_mem), (void*)&I1wx.data));
     args.push_back( make_pair( sizeof(cl_mem), (void*)&I1wy.data));
     args.push_back( make_pair( sizeof(cl_mem), (void*)&grad.data));
     args.push_back( make_pair( sizeof(cl_mem), (void*)&rho.data));
     args.push_back( make_pair( sizeof(cl_int), (void*)&I1w_step));
-    args.push_back( make_pair( sizeof(cl_int), (void*)&u2Step));
     args.push_back( make_pair( sizeof(cl_int), (void*)&u1_offset_x));
     args.push_back( make_pair( sizeof(cl_int), (void*)&u1_offset_y));
-    args.push_back( make_pair( sizeof(cl_int), (void*)&u2_offset_x));
-    args.push_back( make_pair( sizeof(cl_int), (void*)&u2_offset_y));
-
+    args.push_back( make_pair( sizeof(cl_int), (void*)&I1_step));
+    args.push_back( make_pair( sizeof(cl_int), (void*)&I1x_step));
     openCLExecuteKernel(clCxt, &tvl1flow, kernelName, globalThread, localThread, args, -1, -1);
-
-    releaseTexture(I1_tex);
-    releaseTexture(I1x_tex);
-    releaseTexture(I1y_tex);
 }

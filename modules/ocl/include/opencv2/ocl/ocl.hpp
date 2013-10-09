@@ -1623,6 +1623,8 @@ namespace cv
         public:
             OpticalFlowDual_TVL1_OCL();
 
+
+            void operator ()(const oclMat& I0, const oclMat& I1, oclMat& flow);
             void operator ()(const oclMat& I0, const oclMat& I1, oclMat& flowx, oclMat& flowy);
 
             void collectGarbage();
@@ -1675,12 +1677,11 @@ namespace cv
             bool useInitialFlow;
 
         private:
-            void procOneScale(const oclMat& I0, const oclMat& I1, oclMat& u1, oclMat& u2);
+            void procOneScale(const oclMat& I0, const oclMat& I1, oclMat& u1);
 
             std::vector<oclMat> I0s;
             std::vector<oclMat> I1s;
             std::vector<oclMat> u1s;
-            std::vector<oclMat> u2s;
 
             oclMat I1x_buf;
             oclMat I1y_buf;
@@ -1693,9 +1694,6 @@ namespace cv
             oclMat rho_c_buf;
 
             oclMat p11_buf;
-            oclMat p12_buf;
-            oclMat p21_buf;
-            oclMat p22_buf;
 
             oclMat diff_buf;
             oclMat norm_buf;
