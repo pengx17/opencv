@@ -171,6 +171,49 @@ __kernel void resizeLN_C1_D0(__global uchar * dst, __global uchar const * restri
     }
 }
 
+__kernel void resizeLN_C2_D0(__global uchar2 * dst, __global uchar2 * src,
+                     int dstoffset_in_pixel, int srcoffset_in_pixel,int dststep_in_pixel, int srcstep_in_pixel,
+                     int src_cols, int src_rows, int dst_cols, int dst_rows, float ifx, float ify )
+{
+    int dx = get_global_id(0);
+    int dy = get_global_id(1);
+
+    float sx = ((dx+0.5f) * ifx - 0.5f), sy = ((dy+0.5f) * ify - 0.5f);
+    int x = floor(sx), y = floor(sy);
+    float u = sx - x, v = sy - y;
+
+    x<0 ? x=0,u=0 : x,u;
+    x>=src_cols ? x=src_cols-1,u=0 : x,u;
+    y<0 ? y=0,v=0 : y,v;
+    y>=src_rows ? y=src_rows-1,v=0 : y,v;
+
+    u = u * INTER_RESIZE_COEF_SCALE;
+    v = v * INTER_RESIZE_COEF_SCALE;
+
+    int U = rint(u);
+    int V = rint(v);
+    int U1= rint(INTER_RESIZE_COEF_SCALE - u);
+    int V1= rint(INTER_RESIZE_COEF_SCALE - v);
+
+    int y_ = INC(y,src_rows);
+    int x_ = INC(x,src_cols);
+    int4 srcpos;
+    srcpos.x = mad24(y, srcstep_in_pixel, x+srcoffset_in_pixel);
+    srcpos.y = mad24(y, srcstep_in_pixel, x_+srcoffset_in_pixel);
+    srcpos.z = mad24(y_, srcstep_in_pixel, x+srcoffset_in_pixel);
+    srcpos.w = mad24(y_, srcstep_in_pixel, x_+srcoffset_in_pixel);
+    int2 data0 = convert_int2(src[srcpos.x]);
+    int2 data1 = convert_int2(src[srcpos.y]);
+    int2 data2 = convert_int2(src[srcpos.z]);
+    int2 data3 = convert_int2(src[srcpos.w]);
+    int2 val = mul24((int2)mul24(U1, V1) ,  data0) + mul24((int2)mul24(U, V1) ,  data1)
+               +mul24((int2)mul24(U1, V) ,  data2)+mul24((int2)mul24(U, V) ,  data3);
+    int dstpos = mad24(dy, dststep_in_pixel, dx+dstoffset_in_pixel);
+    uchar2 uval =   convert_uchar2((val + (1<<(CAST_BITS-1)))>>CAST_BITS);
+    if(dx>=0 && dx<dst_cols && dy>=0 && dy<dst_rows)
+         dst[dstpos] = uval;
+}
+
 __kernel void resizeLN_C4_D0(__global uchar4 * dst, __global uchar4 * src,
                      int dstoffset_in_pixel, int srcoffset_in_pixel,int dststep_in_pixel, int srcstep_in_pixel,
                      int src_cols, int src_rows, int dst_cols, int dst_rows, float ifx, float ify )
@@ -249,6 +292,44 @@ __kernel void resizeLN_C1_D5(__global float * dst, __global float * src,
                 u *  data3;
     float val = v1 * val1 + v * val2;
     int dstpos = mad24(dy, dststep_in_pixel, dx+dstoffset_in_pixel);
+    if(dx>=0 && dx<dst_cols && dy>=0 && dy<dst_rows)
+         dst[dstpos] = val;
+}
+
+__kernel void resizeLN_C2_D5(__global float2 * dst, __global float2 * src,
+                     int dstoffset_in_pixel, int srcoffset_in_pixel,int dststep_in_pixel, int srcstep_in_pixel,
+                     int src_cols, int src_rows, int dst_cols, int dst_rows, float ifx, float ify )
+{
+    int dx = get_global_id(0);
+    int dy = get_global_id(1);
+
+    float sx = ((dx+0.5f) * ifx - 0.5f), sy = ((dy+0.5f) * ify - 0.5f);
+    int x = floor(sx), y = floor(sy);
+    float u = sx - x, v = sy - y;
+
+    x<0 ? x=0,u=0 : x;
+    x>=src_cols ? x=src_cols-1,u=0 : x;
+    y<0 ? y=0,v=0 : y;
+    y>=src_rows ? y=src_rows-1,v=0 : y;
+
+    int y_ = INC(y,src_rows);
+    int x_ = INC(x,src_cols);
+    float u1 = 1.f-u;
+    float v1 = 1.f-v;
+    int4 srcpos;
+    srcpos.x = mad24(y, srcstep_in_pixel, x+srcoffset_in_pixel);
+    srcpos.y = mad24(y, srcstep_in_pixel, x_+srcoffset_in_pixel);
+    srcpos.z = mad24(y_, srcstep_in_pixel, x+srcoffset_in_pixel);
+    srcpos.w = mad24(y_, srcstep_in_pixel, x_+srcoffset_in_pixel);
+    float2 s_data1, s_data2, s_data3, s_data4;
+    s_data1 = src[srcpos.x];
+    s_data2 = src[srcpos.y];
+    s_data3 = src[srcpos.z];
+    s_data4 = src[srcpos.w];
+    float2 val = u1 * v1 * s_data1 + u * v1 * s_data2
+              +u1 * v *s_data3 + u * v *s_data4;
+    int dstpos = mad24(dy, dststep_in_pixel, dx+dstoffset_in_pixel);
+
     if(dx>=0 && dx<dst_cols && dy>=0 && dy<dst_rows)
          dst[dstpos] = val;
 }
@@ -354,6 +435,25 @@ __kernel void resizeNN_C1_D0(__global uchar * dst, __global uchar * src,
     }
 }
 
+__kernel void resizeNN_C2_D0(__global uchar2 * dst, __global uchar2 * src,
+                     int dstoffset_in_pixel, int srcoffset_in_pixel,int dststep_in_pixel, int srcstep_in_pixel,
+                     int src_cols, int src_rows, int dst_cols, int dst_rows, F ifx, F ify )
+{
+    int dx = get_global_id(0);
+    int dy = get_global_id(1);
+
+    F s1 = dx*ifx;
+    F s2 = dy*ify;
+    int sx = fmin((float)floor(s1), (float)src_cols-1);
+    int sy = fmin((float)floor(s2), (float)src_rows-1);
+    int dpos = mad24(dy, dststep_in_pixel, dx + dstoffset_in_pixel);
+    int spos = mad24(sy, srcstep_in_pixel, sx + srcoffset_in_pixel);
+
+    if(dx>=0 && dx<dst_cols && dy>=0 && dy<dst_rows)
+        dst[dpos] = src[spos];
+
+}
+
 __kernel void resizeNN_C4_D0(__global uchar4 * dst, __global uchar4 * src,
                      int dstoffset_in_pixel, int srcoffset_in_pixel,int dststep_in_pixel, int srcstep_in_pixel,
                      int src_cols, int src_rows, int dst_cols, int dst_rows, F ifx, F ify )
@@ -392,6 +492,26 @@ __kernel void resizeNN_C1_D5(__global float * dst, __global float * src,
 
 }
 
+__kernel void resizeNN_C2_D5(__global float2 * dst, __global float2 * src,
+                     int dstoffset_in_pixel, int srcoffset_in_pixel,int dststep_in_pixel, int srcstep_in_pixel,
+                     int src_cols, int src_rows, int dst_cols, int dst_rows, F ifx, F ify )
+{
+    int dx = get_global_id(0);
+    int dy = get_global_id(1);
+    F s1 = dx*ifx;
+    F s2 = dy*ify;
+    int s_col = floor(s1);
+    int s_row = floor(s2);
+    int sx = min(s_col, src_cols-1);
+    int sy = min(s_row, src_rows-1);
+    int dpos = mad24(dy, dststep_in_pixel, dx + dstoffset_in_pixel);
+    int spos = mad24(sy, srcstep_in_pixel, sx + srcoffset_in_pixel);
+
+    if(dx>=0 && dx<dst_cols && dy>=0 && dy<dst_rows)
+        dst[dpos] = src[spos];
+
+}
+
 __kernel void resizeNN_C4_D5(__global float4 * dst, __global float4 * src,
                      int dstoffset_in_pixel, int srcoffset_in_pixel,int dststep_in_pixel, int srcstep_in_pixel,
                      int src_cols, int src_rows, int dst_cols, int dst_rows, F ifx, F ify )
@@ -409,5 +529,54 @@ __kernel void resizeNN_C4_D5(__global float4 * dst, __global float4 * src,
 
     if(dx>=0 && dx<dst_cols && dy>=0 && dy<dst_rows)
         dst[dpos] = src[spos];
+
+}
+
+#define KSIZE 2
+
+__kernel void resizeAB_C4_D0(__global uchar4 * dst, __global uchar4 * src,
+                     int dstoffset_in_pixel, int srcoffset_in_pixel,int dststep_in_pixel, int srcstep_in_pixel,
+                     int src_cols, int src_rows, int dst_cols, int dst_rows, F ifx, F ify )
+{
+    int dx = get_global_id(0);
+    int dy = get_global_id(1);
+
+	int sx = min((int)floor(dx*ifx+0.5f), src_cols-1);
+	int sy = min((int)floor(dy*ify+0.5f), src_rows-1);
+    int dpos = mad24(dy, dststep_in_pixel, dx);
+    int spos = mad24(sy, srcstep_in_pixel, sx);
+
+	if(dx>=0 && dx<dst_cols && dy>=0 && dy<dst_rows)
+		if(sx-KSIZE>=0 && sx+KSIZE<src_cols-1 && sy-KSIZE>=0 && sy+KSIZE<src_rows-1){
+			int4 sumVal = 0;
+			int4 sumValSqr = 0;
+			int howManyAll = (KSIZE*2+1)*(KSIZE*2+2);
+			float4 var;
+			for(int x=-KSIZE; x<=KSIZE; x++)
+				for(int y=-KSIZE; y<=KSIZE; y++){
+					int4 currVal = convert_int4(src[(sy+y)*srcstep_in_pixel+sx+x]);
+					sumVal += currVal;
+					sumValSqr += (currVal *currVal);
+				}
+			var = convert_float4( ( (sumValSqr * howManyAll)- mul24(sumVal , sumVal) ) ) / ( (float)(howManyAll*howManyAll) ) ;
+			int4 currValCenter = convert_int4(src[spos]);
+			int4 currWRTCenter;
+			float4 weight;
+			float4 tmp_sum = (float4)(0,0,0,0);
+			float4 totalWeight = (float4)(0,0,0,0);
+			for(int x=-KSIZE; x<=KSIZE; x++)
+				for(int y=-KSIZE; y<=KSIZE; y++){
+					uchar4 currPixel = src[(sy+y)*srcstep_in_pixel+sx+x];
+					int4 currVal = convert_int4(currPixel);
+					currWRTCenter = currVal-currValCenter;
+					weight = var / (var + convert_float4(currWRTCenter * currWRTCenter));
+					tmp_sum += convert_float4(currPixel) * weight;
+					totalWeight += weight;
+				}
+			tmp_sum /= totalWeight;
+			dst[dpos] = convert_uchar4(tmp_sum);
+		}
+		else 
+			dst[dpos] = src[spos];
 
 }

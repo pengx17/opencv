@@ -331,6 +331,8 @@ namespace cv
                 kernelName = "resizeLN";
             else if(interpolation == INTER_NEAREST)
                 kernelName = "resizeNN";
+            else if(interpolation == INTER_AREA)
+                kernelName = "resizeAB";
 
             //TODO: improve this kernel
             size_t blkSizeX = 16, blkSizeY = 16;
@@ -349,7 +351,7 @@ namespace cv
             size_t localThreads[3] = {blkSizeX, blkSizeY, 1};
 
             vector< pair<size_t, const void *> > args;
-            if(interpolation == INTER_NEAREST)
+            if(interpolation == INTER_NEAREST || interpolation == INTER_AREA)
             {
                 args.push_back( make_pair(sizeof(cl_mem), (void *)&dst.data));
                 args.push_back( make_pair(sizeof(cl_mem), (void *)&src.data));
@@ -395,9 +397,8 @@ namespace cv
         void resize(const oclMat &src, oclMat &dst, Size dsize,
                     double fx, double fy, int interpolation)
         {
-            CV_Assert(src.type() == CV_8UC1 || src.type() == CV_8UC3 || src.type() == CV_8UC4
-                      || src.type() == CV_32FC1 || src.type() == CV_32FC3 || src.type() == CV_32FC4);
-            CV_Assert(interpolation == INTER_LINEAR || interpolation == INTER_NEAREST);
+            CV_Assert(src.depth() == CV_8U || src.depth() == CV_32F);
+            CV_Assert(interpolation == INTER_LINEAR || interpolation == INTER_NEAREST || interpolation == INTER_AREA);
             CV_Assert( src.size().area() > 0 );
             CV_Assert( !(dsize == Size()) || (fx > 0 && fy > 0) );
 
@@ -420,7 +421,8 @@ namespace cv
 
             dst.create(dsize, src.type());
 
-            if( interpolation == INTER_NEAREST || interpolation == INTER_LINEAR )
+            if( interpolation == INTER_NEAREST || interpolation == INTER_LINEAR 
+                || (interpolation == INTER_AREA && (src.type() == CV_8UC4 || src.type() == CV_8UC3)) )
             {
                 resize_gpu( src, dst, fx, fy, interpolation);
                 return;
