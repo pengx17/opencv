@@ -92,7 +92,7 @@ static void arithmetic_run_generic(const oclMat &src1, const oclMat &src2, const
     std::string kernelName = "arithm_binary_op";
 
     const char * const typeMap[] = { "uchar", "char", "ushort", "short", "int", "float", "double" };
-    const char * const WTypeMap[] = { "short", "short", "int", "int", "int", "float", "double" };
+    const char * const WTypeMap[] = { "float", "double" };
     const char * const funcMap[] = { "FUNC_ADD", "FUNC_SUB", "FUNC_MUL", "FUNC_DIV", "FUNC_ABS", "FUNC_ABS_DIFF", "FUNC_MIN", "FUNC_MAX" };
     const char * const channelMap[] = { "", "", "2", "4", "4" };
     bool haveScalar = use_scalar || src2.empty();
@@ -108,9 +108,9 @@ static void arithmetic_run_generic(const oclMat &src1, const oclMat &src2, const
     std::string buildOptions = format("-D T=%s%s -D WT=%s%s -D convertToT=convert_%s%s%s -D %s "
                                       "-D convertToWT=convert_%s%s",
                                       typeMap[depth], channelMap[oclChannels],
-                                      WTypeMap[WDepth], channelMap[oclChannels],
+                                      WTypeMap[hasDouble?1:0], channelMap[oclChannels],
                                       typeMap[depth], channelMap[oclChannels], (depth >= CV_32F ? "" : (depth == CV_32S ? "_rte" : "_sat_rte")),
-                                      funcMap[op_type], WTypeMap[WDepth], channelMap[oclChannels]);
+                                      funcMap[op_type], WTypeMap[hasDouble?1:0], channelMap[oclChannels]);
 
     vector<pair<size_t , const void *> > args;
     args.push_back( make_pair( sizeof(cl_mem), (void *)&src1.data ));
@@ -128,14 +128,58 @@ static void arithmetic_run_generic(const oclMat &src1, const oclMat &src2, const
         if (haveScalar)
             buildOptions += " -D HAVE_SCALAR";
     }
-
+    cl_float  wScalar_f1;
+    cl_float2 wScalar_f2;
+    cl_float4 wScalar_f4;
+    cl_double  wScalar_d1;
+    cl_double2 wScalar_d2;
+    cl_double4 wScalar_d4;
     if (haveScalar)
     {
-        const int WDepthMap[] = { CV_16S, CV_16S, CV_32S, CV_32S, CV_32S, CV_32F, CV_64F };
-        m.create(1, 1, CV_MAKE_TYPE(WDepthMap[WDepth], oclChannels));
-        m.setTo(scalar);
-
-        args.push_back( make_pair( sizeof(cl_mem), (void *)&m.data ));
+        if(hasDouble)
+        {
+            switch(oclChannels)
+            {
+            case 1:
+                wScalar_d1 = scalar[0];
+                args.push_back( make_pair( sizeof(cl_double), (void *)&wScalar_d1 ));
+                break;
+            case 2:
+                wScalar_d2.s[0] = scalar[0];
+                wScalar_d2.s[1] = scalar[1];
+                args.push_back( make_pair( sizeof(cl_double2), (void *)&wScalar_d2));
+                break;
+            case 4:
+                wScalar_d4.s[0] = scalar[0];
+                wScalar_d4.s[1] = scalar[1];
+                wScalar_d4.s[2] = scalar[2];
+                wScalar_d4.s[3] = scalar[3];
+                args.push_back( make_pair( sizeof(cl_double4), (void *)&wScalar_d4));
+                break;
+            }
+        }
+        else
+        {
+            switch(oclChannels)
+            {
+            case 1:
+                wScalar_f1 = scalar[0];
+                args.push_back( make_pair( sizeof(cl_float), (void *)&wScalar_f1 ));
+                break;
+            case 2:
+                wScalar_f2.s[0] = scalar[0];
+                wScalar_f2.s[1] = scalar[1];
+                args.push_back( make_pair( sizeof(cl_float2), (void *)&wScalar_f2));
+                break;
+            case 4:
+                wScalar_f4.s[0] = scalar[0];
+                wScalar_f4.s[1] = scalar[1];
+                wScalar_f4.s[2] = scalar[2];
+                wScalar_f4.s[3] = scalar[3];
+                args.push_back( make_pair( sizeof(cl_float4), (void *)&wScalar_f4));
+                break;
+            }
+        }
 
         kernelName += "_scalar";
     }
